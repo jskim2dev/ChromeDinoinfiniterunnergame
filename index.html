@@ -103,6 +103,13 @@
     animation: pulse 1.4s ease-in-out infinite;
   }
 
+  .badge.manual {
+    border-color: var(--neon-cyan);
+    color: var(--neon-cyan);
+    text-shadow: 0 0 8px rgba(0, 240, 255, 0.8);
+    box-shadow: 0 0 12px rgba(0, 240, 255, 0.25);
+  }
+
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.45; }
@@ -129,7 +136,7 @@
     <div class="hud">
       <div class="left">
         <span class="tag">CYBER DINO</span><br />
-        <span class="badge">AUTOPILOT ENGAGED</span>
+        <span class="badge" id="mode">AUTOPILOT ENGAGED</span>
       </div>
       <div class="right">
         <span class="stat">SCORE <span class="num" id="score">0</span></span><br />
@@ -137,7 +144,7 @@
         <span class="stat">RUN <span class="num" id="runs">1</span></span>
       </div>
     </div>
-    <div class="footer">SELF-PLAYING NEURAL RUNNER &nbsp;//&nbsp; v1.0</div>
+    <div class="footer">SPACE / &uarr; JUMP &nbsp;&middot;&nbsp; &darr; DUCK &nbsp;&middot;&nbsp; P TOGGLE AUTOPILOT &nbsp;&middot;&nbsp; TAP = JUMP</div>
   </div>
 
   <script>
@@ -185,8 +192,68 @@
       restartTimer: 0,
       shake: 0,
       time: 0,
+      autoplay: true,
     };
     bestEl.textContent = state.best;
+
+    // ---- Input (manual control) ----
+    const input = { duckHeld: false };
+
+    function updateModeBadge() {
+      const el = document.getElementById("mode");
+      if (state.autoplay) {
+        el.textContent = "AUTOPILOT ENGAGED";
+        el.classList.remove("manual");
+      } else {
+        el.textContent = "MANUAL // PILOT: YOU";
+        el.classList.add("manual");
+      }
+    }
+
+    function setAutoplay(on) {
+      if (state.autoplay === on) return;
+      state.autoplay = on;
+      if (on) { input.duckHeld = false; dino.ducking = false; }
+      updateModeBadge();
+    }
+
+    // Any control input drops out of autopilot into manual mode.
+    function handleJumpInput() {
+      setAutoplay(false);
+      if (state.gameOver) { reset(); return; }
+      doJump();
+    }
+
+    window.addEventListener("keydown", (e) => {
+      switch (e.code) {
+        case "Space":
+        case "ArrowUp":
+        case "KeyW":
+          e.preventDefault();
+          handleJumpInput();
+          break;
+        case "ArrowDown":
+        case "KeyS":
+          e.preventDefault();
+          setAutoplay(false);
+          input.duckHeld = true;
+          break;
+        case "KeyP":
+        case "KeyA":
+          e.preventDefault();
+          setAutoplay(!state.autoplay);
+          break;
+      }
+    });
+
+    window.addEventListener("keyup", (e) => {
+      if (e.code === "ArrowDown" || e.code === "KeyS") input.duckHeld = false;
+    });
+
+    canvas.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      handleJumpInput();
+    });
 
     // ---- Dino ----
     const dino = {
@@ -306,14 +373,21 @@
         state.restartTimer -= dt;
         updateParticles();
         if (state.shake > 0) state.shake *= 0.9;
-        if (state.restartTimer <= 0) reset();
+        // Autopilot reboots on its own; a manual pilot reboots on input.
+        if (state.autoplay && state.restartTimer <= 0) reset();
         return;
       }
 
       // Difficulty ramp, capped so the autopilot stays reliable.
       state.speed = Math.min(13.5, state.baseSpeed + state.score * 0.0022);
 
-      think();
+      if (state.autoplay) {
+        think();
+      } else {
+        dino.ducking = input.duckHeld && dino.onGround;
+        // Hold duck in the air to slam down faster.
+        if (input.duckHeld && !dino.onGround) dino.vy += 1.4;
+      }
 
       // Dino physics.
       dino.vy += dino.gravity;
@@ -733,7 +807,10 @@
       ctx.shadowBlur = 14;
       ctx.fillStyle = COLORS.cyan;
       ctx.font = "20px 'Courier New', monospace";
-      ctx.fillText("REBOOTING NEURAL RUNNER...", W / 2, H / 2 + 34);
+      ctx.fillText(
+        state.autoplay ? "REBOOTING NEURAL RUNNER..." : "PRESS SPACE / TAP TO REBOOT",
+        W / 2, H / 2 + 34
+      );
       ctx.restore();
     }
 
