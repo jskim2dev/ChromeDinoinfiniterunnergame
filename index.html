@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CYBER DINO // AUTORUN</title>
+<style>
+  :root {
+    --neon-cyan: #00f0ff;
+    --neon-magenta: #ff00d4;
+    --neon-green: #39ff14;
+    --bg-0: #05060f;
+    --bg-1: #0a0e1f;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    background: radial-gradient(ellipse at 50% 30%, #0c1230 0%, var(--bg-0) 70%);
+    color: #cfefff;
+    font-family: "Courier New", ui-monospace, monospace;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #stage {
+    position: relative;
+    width: min(96vw, 1000px);
+    aspect-ratio: 5 / 2;
+    border: 1px solid rgba(0, 240, 255, 0.35);
+    border-radius: 10px;
+    box-shadow:
+      0 0 0 1px rgba(255, 0, 212, 0.15),
+      0 0 40px rgba(0, 240, 255, 0.25),
+      inset 0 0 60px rgba(0, 240, 255, 0.06);
+    overflow: hidden;
+    background: linear-gradient(180deg, #060a18 0%, #04060f 100%);
+  }
+
+  canvas { display: block; width: 100%; height: 100%; }
+
+  /* CRT scanline + vignette overlay */
+  #stage::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      repeating-linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 0) 0px,
+        rgba(0, 0, 0, 0) 2px,
+        rgba(0, 0, 0, 0.18) 3px,
+        rgba(0, 0, 0, 0) 4px
+      ),
+      radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.45) 100%);
+    mix-blend-mode: multiply;
+  }
+
+  .hud {
+    position: absolute;
+    top: 14px;
+    left: 18px;
+    right: 18px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    pointer-events: none;
+    z-index: 3;
+    font-size: clamp(11px, 1.6vw, 16px);
+    letter-spacing: 2px;
+  }
+
+  .hud .left { text-align: left; }
+  .hud .right { text-align: right; }
+
+  .tag {
+    color: var(--neon-magenta);
+    text-shadow: 0 0 8px rgba(255, 0, 212, 0.8);
+    font-weight: bold;
+  }
+
+  .stat {
+    color: var(--neon-cyan);
+    text-shadow: 0 0 8px rgba(0, 240, 255, 0.8);
+  }
+
+  .num { color: #fff; text-shadow: 0 0 10px var(--neon-cyan); }
+
+  .badge {
+    display: inline-block;
+    margin-top: 6px;
+    padding: 2px 8px;
+    border: 1px solid var(--neon-green);
+    border-radius: 4px;
+    color: var(--neon-green);
+    text-shadow: 0 0 8px rgba(57, 255, 20, 0.8);
+    box-shadow: 0 0 12px rgba(57, 255, 20, 0.25);
+    font-size: 0.8em;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+
+  .footer {
+    position: absolute;
+    bottom: 10px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    z-index: 3;
+    pointer-events: none;
+    font-size: clamp(9px, 1.3vw, 12px);
+    letter-spacing: 3px;
+    color: rgba(0, 240, 255, 0.55);
+    text-shadow: 0 0 6px rgba(0, 240, 255, 0.4);
+  }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <canvas id="game"></canvas>
+    <div class="hud">
+      <div class="left">
+        <span class="tag">CYBER DINO</span><br />
+        <span class="badge">AUTOPILOT ENGAGED</span>
+      </div>
+      <div class="right">
+        <span class="stat">SCORE <span class="num" id="score">0</span></span><br />
+        <span class="stat">BEST <span class="num" id="best">0</span></span><br />
+        <span class="stat">RUN <span class="num" id="runs">1</span></span>
+      </div>
+    </div>
+    <div class="footer">SELF-PLAYING NEURAL RUNNER &nbsp;//&nbsp; v1.0</div>
+  </div>
+
+  <script>
+  (() => {
+    "use strict";
+
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const scoreEl = document.getElementById("score");
+    const bestEl = document.getElementById("best");
+    const runsEl = document.getElementById("runs");
+
+    // Logical resolution; canvas is scaled to fit via CSS.
+    const W = 1000, H = 400;
+
+    function fitCanvas() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = W * dpr;
+      canvas.height = H * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    fitCanvas();
+    window.addEventListener("resize", fitCanvas);
+
+    const COLORS = {
+      cyan: "#00f0ff",
+      magenta: "#ff00d4",
+      green: "#39ff14",
+      yellow: "#ffe600",
+    };
+
+    const GROUND_Y = H - 70;
+
+    // ---- Game state ----
+    const state = {
+      speed: 7,
+      baseSpeed: 7,
+      score: 0,
+      best: Number(localStorage.getItem("cyberDinoBest") || 0),
+      runs: 1,
+      obstacles: [],
+      particles: [],
+      spawnTimer: 0,
+      gameOver: false,
+      restartTimer: 0,
+      shake: 0,
+      time: 0,
+    };
+    bestEl.textContent = state.best;
+
+    // ---- Dino ----
+    const dino = {
+      x: 130,
+      y: GROUND_Y,
+      w: 50,
+      h: 56,
+      vy: 0,
+      gravity: 0.9,
+      jumpV: -17,
+      onGround: true,
+      ducking: false,
+      runFrame: 0,
+    };
+
+    // Parallax background layers
+    const stars = Array.from({ length: 70 }, () => ({
+      x: Math.random() * W,
+      y: Math.random() * (GROUND_Y - 40),
+      z: Math.random() * 0.7 + 0.3,
+      s: Math.random() * 1.6 + 0.4,
+    }));
+
+    const buildings = [];
+    function seedBuildings() {
+      let x = 0;
+      while (x < W + 200) {
+        const bw = 40 + Math.random() * 70;
+        const bh = 60 + Math.random() * 150;
+        buildings.push({ x, w: bw, h: bh, lit: Math.random() > 0.3 });
+        x += bw + 10 + Math.random() * 30;
+      }
+    }
+    seedBuildings();
+
+    // ---- Obstacle factory ----
+    // type: "spike" (ground, must jump), "drone-low" (must duck),
+    //       "drone-high" (passes overhead, AI ignores)
+    function spawnObstacle() {
+      const r = Math.random();
+      let type;
+      if (r < 0.62) type = "spike";
+      else if (r < 0.84) type = "drone-low";
+      else type = "drone-high";
+
+      if (type === "spike") {
+        const tall = Math.random() > 0.5;
+        const cluster = Math.random() > 0.7 ? 2 : 1;
+        const w = 22 * cluster + (cluster - 1) * 6;
+        const h = tall ? 60 : 42;
+        state.obstacles.push({
+          type, x: W + 40, y: GROUND_Y, w, h, cluster, tall, hit: false,
+        });
+      } else if (type === "drone-low") {
+        state.obstacles.push({
+          type, x: W + 40, y: GROUND_Y - 4, w: 56, h: 30, hit: false, flap: 0,
+        });
+      } else {
+        state.obstacles.push({
+          type, x: W + 40, y: GROUND_Y - 92, w: 56, h: 30, hit: false, flap: 0,
+        });
+      }
+    }
+
+    function spawnParticles(x, y, color, n, spread) {
+      for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const sp = Math.random() * spread;
+        state.particles.push({
+          x, y,
+          vx: Math.cos(a) * sp,
+          vy: Math.sin(a) * sp - 1,
+          life: 1,
+          color,
+          size: Math.random() * 3 + 1,
+        });
+      }
+    }
+
+    // ---- AI: the runner plays itself ----
+    function think() {
+      // Find the nearest obstacle ahead of the dino's front edge.
+      let target = null;
+      let bestDist = Infinity;
+      for (const o of state.obstacles) {
+        const dist = o.x - (dino.x + dino.w);
+        if (dist < -o.w) continue; // already passed
+        if (dist < bestDist) { bestDist = dist; target = o; }
+      }
+      dino.ducking = false;
+      if (!target) return;
+
+      // Lead distance scales with speed so we react earlier when moving fast,
+      // timed so the jump arc peaks as the obstacle reaches the dino.
+      const lead = state.speed * 10 + 26;
+
+      // High drones float above a standing dino, so they need no reaction.
+      // Spikes and low drones occupy the dino's body height: jump them.
+      if (target.type === "spike" || target.type === "drone-low") {
+        if (bestDist < lead && dino.onGround) doJump();
+      }
+    }
+
+    function doJump() {
+      if (!dino.onGround) return;
+      dino.vy = dino.jumpV;
+      dino.onGround = false;
+      dino.ducking = false;
+      spawnParticles(dino.x + dino.w / 2, GROUND_Y, COLORS.cyan, 14, 6);
+    }
+
+    // ---- Update ----
+    function update(dt) {
+      state.time += dt;
+
+      if (state.gameOver) {
+        state.restartTimer -= dt;
+        updateParticles();
+        if (state.shake > 0) state.shake *= 0.9;
+        if (state.restartTimer <= 0) reset();
+        return;
+      }
+
+      // Difficulty ramp, capped so the autopilot stays reliable.
+      state.speed = Math.min(13.5, state.baseSpeed + state.score * 0.0022);
+
+      think();
+
+      // Dino physics.
+      dino.vy += dino.gravity;
+      dino.y += dino.vy;
+      if (dino.y >= GROUND_Y) {
+        if (!dino.onGround) {
+          spawnParticles(dino.x + dino.w / 2, GROUND_Y, COLORS.magenta, 8, 4);
+        }
+        dino.y = GROUND_Y;
+        dino.vy = 0;
+        dino.onGround = true;
+      }
+      dino.runFrame += state.speed * 0.06;
+
+      // Spawn obstacles with speed-aware gaps. The minimum gap exceeds the
+      // jump arc's horizontal reach (~38 frames of air) so the runner always
+      // lands with room before the next obstacle.
+      state.spawnTimer -= state.speed;
+      if (state.spawnTimer <= 0) {
+        spawnObstacle();
+        const minGap = 40 * state.speed + 150;
+        state.spawnTimer = minGap + Math.random() * 220;
+      }
+
+      // Move obstacles + collision.
+      const dh = dino.ducking ? dino.h * 0.55 : dino.h;
+      const dy = dino.y - dh;
+      const dbox = { x: dino.x + 6, y: dy + 4, w: dino.w - 12, h: dh - 6 };
+
+      for (const o of state.obstacles) {
+        o.x -= state.speed;
+        if (o.flap !== undefined) o.flap += 0.3;
+        const obox = { x: o.x, y: o.y - o.h, w: o.w, h: o.h };
+        if (!state.gameOver && intersects(dbox, obox)) {
+          crash(o);
+        }
+      }
+      state.obstacles = state.obstacles.filter((o) => o.x > -o.w - 20);
+
+      // Score.
+      state.score += state.speed * 0.03;
+      scoreEl.textContent = Math.floor(state.score);
+
+      // Parallax scroll.
+      for (const b of buildings) {
+        b.x -= state.speed * 0.25;
+      }
+      // Recycle buildings.
+      let maxX = 0;
+      for (const b of buildings) maxX = Math.max(maxX, b.x + b.w);
+      for (const b of buildings) {
+        if (b.x + b.w < -20) {
+          b.x = maxX + 10 + Math.random() * 30;
+          b.h = 60 + Math.random() * 150;
+          b.w = 40 + Math.random() * 70;
+          b.lit = Math.random() > 0.3;
+          maxX = b.x + b.w;
+        }
+      }
+      for (const s of stars) {
+        s.x -= state.speed * 0.08 * s.z;
+        if (s.x < 0) s.x = W;
+      }
+
+      updateParticles();
+      if (state.shake > 0) state.shake *= 0.88;
+    }
+
+    function updateParticles() {
+      for (const p of state.particles) {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.25;
+        p.life -= 0.025;
+      }
+      state.particles = state.particles.filter((p) => p.life > 0);
+    }
+
+    function intersects(a, b) {
+      return a.x < b.x + b.w && a.x + a.w > b.x &&
+             a.y < b.y + b.h && a.y + a.h > b.y;
+    }
+
+    function crash(o) {
+      o.hit = true;
+      state.gameOver = true;
+      state.restartTimer = 1500;
+      state.shake = 16;
+      spawnParticles(dino.x + dino.w / 2, dino.y - dino.h / 2, COLORS.magenta, 40, 11);
+      spawnParticles(dino.x + dino.w / 2, dino.y - dino.h / 2, COLORS.cyan, 30, 8);
+      if (state.score > state.best) {
+        state.best = Math.floor(state.score);
+        localStorage.setItem("cyberDinoBest", state.best);
+        bestEl.textContent = state.best;
+      }
+    }
+
+    function reset() {
+      state.score = 0;
+      state.speed = state.baseSpeed;
+      state.obstacles = [];
+      state.spawnTimer = 60;
+      state.gameOver = false;
+      state.shake = 0;
+      state.runs += 1;
+      runsEl.textContent = state.runs;
+      dino.y = GROUND_Y;
+      dino.vy = 0;
+      dino.onGround = true;
+      dino.ducking = false;
+    }
+
+    // ---- Render ----
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+
+      ctx.save();
+      if (state.shake > 0.5) {
+        ctx.translate(
+          (Math.random() - 0.5) * state.shake,
+          (Math.random() - 0.5) * state.shake
+        );
+      }
+
+      drawStars();
+      drawSkyline();
+      drawGrid();
+      drawGround();
+      drawObstacles();
+      drawDino();
+      drawParticles();
+
+      if (state.gameOver) drawGameOver();
+
+      ctx.restore();
+    }
+
+    function drawStars() {
+      for (const s of stars) {
+        ctx.globalAlpha = 0.4 + s.z * 0.5;
+        ctx.fillStyle = s.s > 1.4 ? COLORS.cyan : "#9fdcff";
+        ctx.fillRect(s.x, s.y, s.s, s.s);
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    function drawSkyline() {
+      for (const b of buildings) {
+        const top = GROUND_Y - b.h;
+        const grad = ctx.createLinearGradient(0, top, 0, GROUND_Y);
+        grad.addColorStop(0, "rgba(20, 12, 45, 0.95)");
+        grad.addColorStop(1, "rgba(8, 6, 22, 0.95)");
+        ctx.fillStyle = grad;
+        ctx.fillRect(b.x, top, b.w, b.h);
+
+        // neon edge
+        ctx.strokeStyle = "rgba(255, 0, 212, 0.35)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(b.x + 0.5, top + 0.5, b.w - 1, b.h - 1);
+
+        // windows
+        if (b.lit) {
+          ctx.fillStyle = "rgba(0, 240, 255, 0.25)";
+          for (let wy = top + 8; wy < GROUND_Y - 6; wy += 14) {
+            for (let wx = b.x + 6; wx < b.x + b.w - 6; wx += 12) {
+              if ((wx + wy) % 3 === 0) ctx.fillRect(wx, wy, 5, 7);
+            }
+          }
+        }
+      }
+    }
+
+    function drawGrid() {
+      // Perspective floor grid below the ground line.
+      ctx.strokeStyle = "rgba(0, 240, 255, 0.18)";
+      ctx.lineWidth = 1;
+      const vanishX = W / 2;
+      const horizon = GROUND_Y;
+      // horizontal lines receding
+      const offset = (state.time * state.speed * 0.06) % 40;
+      for (let i = 0; i < 12; i++) {
+        const t = i / 12;
+        const y = horizon + Math.pow(t, 1.6) * (H - horizon) + offset * (1 - t);
+        if (y > H) continue;
+        ctx.globalAlpha = 0.5 * (1 - t) + 0.1;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(W, y);
+        ctx.stroke();
+      }
+      // vertical converging lines
+      ctx.globalAlpha = 0.22;
+      for (let gx = -10; gx <= 10; gx++) {
+        const bx = vanishX + gx * 70;
+        ctx.beginPath();
+        ctx.moveTo(vanishX, horizon);
+        ctx.lineTo(bx, H);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    function drawGround() {
+      // glowing ground line
+      ctx.shadowColor = COLORS.cyan;
+      ctx.shadowBlur = 14;
+      ctx.strokeStyle = COLORS.cyan;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, GROUND_Y);
+      ctx.lineTo(W, GROUND_Y);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      // moving dashes on the ground
+      ctx.strokeStyle = "rgba(255, 0, 212, 0.5)";
+      ctx.lineWidth = 2;
+      const dash = 26;
+      const off = (state.time * state.speed * 0.12) % (dash * 2);
+      ctx.beginPath();
+      for (let x = -off; x < W; x += dash * 2) {
+        ctx.moveTo(x, GROUND_Y + 6);
+        ctx.lineTo(x + dash, GROUND_Y + 6);
+      }
+      ctx.stroke();
+    }
+
+    function neonRect(x, y, w, h, color, fill) {
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 12;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      if (fill) {
+        ctx.fillStyle = fill;
+        ctx.fillRect(x, y, w, h);
+      }
+      ctx.strokeRect(x, y, w, h);
+      ctx.shadowBlur = 0;
+    }
+
+    function drawDino() {
+      const ducking = dino.ducking && dino.onGround;
+      const h = ducking ? dino.h * 0.55 : dino.h;
+      const w = ducking ? dino.w + 14 : dino.w;
+      const x = dino.x;
+      const y = dino.y - h;
+
+      const body = state.gameOver ? "#555" : COLORS.green;
+      const glow = state.gameOver ? "#777" : COLORS.green;
+
+      ctx.save();
+      ctx.shadowColor = glow;
+      ctx.shadowBlur = state.gameOver ? 4 : 16;
+
+      // Body (rounded cyber dino silhouette built from rects).
+      ctx.fillStyle = "rgba(8, 30, 14, 0.85)";
+      ctx.strokeStyle = body;
+      ctx.lineWidth = 2.5;
+
+      // main torso
+      roundRect(x + 8, y + 8, w - 16, h - 10, 8);
+      ctx.fill(); ctx.stroke();
+
+      // head
+      const headW = 26, headH = 22;
+      const hx = x + w - headW - 2;
+      const hy = y - (ducking ? 0 : 6);
+      roundRect(hx, hy, headW, headH, 6);
+      ctx.fill(); ctx.stroke();
+
+      // neon eye (visor)
+      ctx.shadowBlur = 14;
+      ctx.fillStyle = state.gameOver ? COLORS.magenta : COLORS.cyan;
+      ctx.fillRect(hx + 13, hy + 7, 9, 4);
+
+      // circuit lines on body
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = "rgba(0, 240, 255, 0.6)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x + 14, y + 18); ctx.lineTo(x + w - 22, y + 18);
+      ctx.moveTo(x + 18, y + 18); ctx.lineTo(x + 18, y + h - 8);
+      ctx.stroke();
+
+      // legs (animated when running on ground)
+      ctx.strokeStyle = body;
+      ctx.lineWidth = 4;
+      ctx.shadowColor = glow;
+      ctx.shadowBlur = state.gameOver ? 2 : 10;
+      const legY = y + h - 2;
+      if (dino.onGround && !state.gameOver) {
+        const swing = Math.sin(dino.runFrame) * 7;
+        ctx.beginPath();
+        ctx.moveTo(x + 16, legY); ctx.lineTo(x + 16 + swing, legY + 12);
+        ctx.moveTo(x + w - 22, legY); ctx.lineTo(x + w - 22 - swing, legY + 12);
+        ctx.stroke();
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(x + 16, legY); ctx.lineTo(x + 16, legY + 10);
+        ctx.moveTo(x + w - 22, legY); ctx.lineTo(x + w - 22, legY + 10);
+        ctx.stroke();
+      }
+
+      // tail
+      ctx.beginPath();
+      ctx.moveTo(x + 8, y + 16);
+      ctx.lineTo(x - 10, y + 10);
+      ctx.lineTo(x + 8, y + 28);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(8, 30, 14, 0.85)";
+      ctx.strokeStyle = body;
+      ctx.lineWidth = 2.5;
+      ctx.fill(); ctx.stroke();
+
+      ctx.restore();
+    }
+
+    function drawObstacles() {
+      for (const o of state.obstacles) {
+        if (o.type === "spike") {
+          drawSpike(o);
+        } else {
+          drawDrone(o);
+        }
+      }
+    }
+
+    function drawSpike(o) {
+      const color = COLORS.magenta;
+      ctx.save();
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 14;
+      ctx.fillStyle = "rgba(40, 6, 32, 0.9)";
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2.5;
+      const unit = o.cluster || 1;
+      const segW = 22;
+      for (let i = 0; i < unit; i++) {
+        const bx = o.x + i * (segW + 6);
+        const topY = GROUND_Y - o.h;
+        // crystalline spike
+        ctx.beginPath();
+        ctx.moveTo(bx, GROUND_Y);
+        ctx.lineTo(bx + segW / 2, topY);
+        ctx.lineTo(bx + segW, GROUND_Y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        // inner glow line
+        ctx.beginPath();
+        ctx.moveTo(bx + segW / 2, topY + 6);
+        ctx.lineTo(bx + segW / 2, GROUND_Y - 4);
+        ctx.strokeStyle = COLORS.cyan;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.5;
+      }
+      ctx.restore();
+    }
+
+    function drawDrone(o) {
+      const color = o.type === "drone-high" ? COLORS.yellow : COLORS.cyan;
+      const cx = o.x + o.w / 2;
+      const cy = o.y - o.h / 2;
+      ctx.save();
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 14;
+      ctx.strokeStyle = color;
+      ctx.fillStyle = "rgba(4, 20, 30, 0.85)";
+      ctx.lineWidth = 2.5;
+
+      // body
+      roundRect(o.x + 12, o.y - o.h + 8, o.w - 24, o.h - 12, 6);
+      ctx.fill(); ctx.stroke();
+
+      // wings / rotors flapping
+      const flap = Math.sin(o.flap || 0) * 6;
+      ctx.beginPath();
+      ctx.moveTo(o.x + 12, cy);
+      ctx.lineTo(o.x - 4, cy - 8 - flap);
+      ctx.moveTo(o.x + o.w - 12, cy);
+      ctx.lineTo(o.x + o.w + 4, cy - 8 - flap);
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      // eye
+      ctx.shadowBlur = 10;
+      ctx.fillStyle = color;
+      ctx.fillRect(cx - 3, cy - 2, 7, 4);
+      ctx.restore();
+    }
+
+    function drawParticles() {
+      for (const p of state.particles) {
+        ctx.globalAlpha = Math.max(0, p.life);
+        ctx.fillStyle = p.color;
+        ctx.shadowColor = p.color;
+        ctx.shadowBlur = 8;
+        ctx.fillRect(p.x, p.y, p.size, p.size);
+      }
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0;
+    }
+
+    function drawGameOver() {
+      ctx.save();
+      ctx.fillStyle = "rgba(5, 6, 15, 0.55)";
+      ctx.fillRect(0, 0, W, H);
+      ctx.textAlign = "center";
+      ctx.shadowColor = COLORS.magenta;
+      ctx.shadowBlur = 20;
+      ctx.fillStyle = COLORS.magenta;
+      ctx.font = "bold 52px 'Courier New', monospace";
+      ctx.fillText("SYSTEM FAILURE", W / 2, H / 2 - 6);
+      ctx.shadowColor = COLORS.cyan;
+      ctx.shadowBlur = 14;
+      ctx.fillStyle = COLORS.cyan;
+      ctx.font = "20px 'Courier New', monospace";
+      ctx.fillText("REBOOTING NEURAL RUNNER...", W / 2, H / 2 + 34);
+      ctx.restore();
+    }
+
+    // ---- helpers ----
+    function roundRect(x, y, w, h, r) {
+      r = Math.min(r, w / 2, h / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    // ---- main loop ----
+    let last = performance.now();
+    function loop(now) {
+      const dt = Math.min(now - last, 50);
+      last = now;
+      update(dt);
+      draw();
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+  })();
+  </script>
+</body>
+</html>
