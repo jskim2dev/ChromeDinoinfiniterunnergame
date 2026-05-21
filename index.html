@@ -128,6 +128,60 @@
     color: rgba(0, 240, 255, 0.55);
     text-shadow: 0 0 6px rgba(0, 240, 255, 0.4);
   }
+
+  .difficulty {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 5px;
+    pointer-events: auto;
+    font-size: clamp(8px, 1.2vw, 12px);
+    letter-spacing: 1px;
+  }
+
+  .diff-label {
+    color: rgba(0, 240, 255, 0.6);
+    text-shadow: 0 0 6px rgba(0, 240, 255, 0.4);
+    margin-right: 2px;
+  }
+
+  .diff-btn {
+    font-family: inherit;
+    background: rgba(8, 14, 31, 0.6);
+    color: rgba(207, 239, 255, 0.7);
+    border: 1px solid rgba(0, 240, 255, 0.3);
+    border-radius: 4px;
+    padding: 3px 9px;
+    cursor: pointer;
+    letter-spacing: 1px;
+    transition: color .15s, background .15s, border-color .15s, box-shadow .15s;
+  }
+
+  .diff-btn:hover { color: #fff; border-color: var(--neon-cyan); }
+
+  .diff-btn.active { color: #05060f; font-weight: bold; }
+  .diff-btn[data-diff="EASY"].active {
+    background: var(--neon-green); border-color: var(--neon-green);
+    box-shadow: 0 0 12px rgba(57, 255, 20, 0.6);
+  }
+  .diff-btn[data-diff="NORMAL"].active {
+    background: var(--neon-cyan); border-color: var(--neon-cyan);
+    box-shadow: 0 0 12px rgba(0, 240, 255, 0.6);
+  }
+  .diff-btn[data-diff="HARD"].active {
+    background: #ffe600; border-color: #ffe600;
+    box-shadow: 0 0 12px rgba(255, 230, 0, 0.6);
+  }
+  .diff-btn[data-diff="INSANE"].active {
+    background: var(--neon-magenta); border-color: var(--neon-magenta);
+    box-shadow: 0 0 14px rgba(255, 0, 212, 0.8);
+  }
 </style>
 </head>
 <body>
@@ -144,7 +198,14 @@
         <span class="stat">RUN <span class="num" id="runs">1</span></span>
       </div>
     </div>
-    <div class="footer">SPACE / &uarr; JUMP &nbsp;&middot;&nbsp; &darr; DUCK &nbsp;&middot;&nbsp; P TOGGLE AUTOPILOT &nbsp;&middot;&nbsp; TAP = JUMP</div>
+    <div class="difficulty" id="difficulty">
+      <span class="diff-label">DIFFICULTY</span>
+      <button class="diff-btn" data-diff="EASY">EASY</button>
+      <button class="diff-btn" data-diff="NORMAL">NORMAL</button>
+      <button class="diff-btn" data-diff="HARD">HARD</button>
+      <button class="diff-btn" data-diff="INSANE">INSANE</button>
+    </div>
+    <div class="footer">SPACE / &uarr; JUMP &nbsp;&middot;&nbsp; &darr; DUCK &nbsp;&middot;&nbsp; P AUTOPILOT &nbsp;&middot;&nbsp; 1-4 DIFFICULTY &nbsp;&middot;&nbsp; TAP = JUMP</div>
   </div>
 
   <script>
@@ -178,10 +239,22 @@
 
     const GROUND_Y = H - 70;
 
+    // ---- Difficulty presets ----
+    // gapMul stays above the jump's ~37-frame air time so the autopilot always
+    // lands with room before the next obstacle, even at the higher caps.
+    const DIFFICULTIES = {
+      EASY:   { baseSpeed: 6.5, cap: 11, ramp: 0.0018, gapMul: 48, gapBase: 200, gapRand: 260 },
+      NORMAL: { baseSpeed: 8,   cap: 14, ramp: 0.0030, gapMul: 44, gapBase: 150, gapRand: 210 },
+      HARD:   { baseSpeed: 10,  cap: 17, ramp: 0.0040, gapMul: 42, gapBase: 110, gapRand: 160 },
+      INSANE: { baseSpeed: 13,  cap: 20, ramp: 0.0060, gapMul: 42, gapBase: 95,  gapRand: 120 },
+    };
+    const savedDiff = localStorage.getItem("cyberDinoDiff");
+    const initialDifficulty = DIFFICULTIES[savedDiff] ? savedDiff : "NORMAL";
+
     // ---- Game state ----
     const state = {
-      speed: 7,
-      baseSpeed: 7,
+      difficulty: initialDifficulty,
+      speed: DIFFICULTIES[initialDifficulty].baseSpeed,
       score: 0,
       best: Number(localStorage.getItem("cyberDinoBest") || 0),
       runs: 1,
@@ -243,6 +316,10 @@
           e.preventDefault();
           setAutoplay(!state.autoplay);
           break;
+        case "Digit1": setDifficulty("EASY"); break;
+        case "Digit2": setDifficulty("NORMAL"); break;
+        case "Digit3": setDifficulty("HARD"); break;
+        case "Digit4": setDifficulty("INSANE"); break;
       }
     });
 
@@ -254,6 +331,30 @@
       e.preventDefault();
       handleJumpInput();
     });
+
+    // ---- Difficulty selection ----
+    const diffButtons = Array.from(document.querySelectorAll(".diff-btn"));
+
+    function applyDifficultyUI() {
+      for (const btn of diffButtons) {
+        btn.classList.toggle("active", btn.dataset.diff === state.difficulty);
+      }
+    }
+
+    function setDifficulty(name) {
+      if (!DIFFICULTIES[name] || name === state.difficulty) return;
+      state.difficulty = name;
+      localStorage.setItem("cyberDinoDiff", name);
+      applyDifficultyUI();
+      reset();              // start a fresh run at the new difficulty
+      state.runs = 1;
+      runsEl.textContent = state.runs;
+    }
+
+    for (const btn of diffButtons) {
+      btn.addEventListener("click", () => setDifficulty(btn.dataset.diff));
+    }
+    applyDifficultyUI();
 
     // ---- Dino ----
     const dino = {
@@ -379,7 +480,8 @@
       }
 
       // Difficulty ramp, capped so the autopilot stays reliable.
-      state.speed = Math.min(13.5, state.baseSpeed + state.score * 0.0022);
+      const cfg = DIFFICULTIES[state.difficulty];
+      state.speed = Math.min(cfg.cap, cfg.baseSpeed + state.score * cfg.ramp);
 
       if (state.autoplay) {
         think();
@@ -408,8 +510,8 @@
       state.spawnTimer -= state.speed;
       if (state.spawnTimer <= 0) {
         spawnObstacle();
-        const minGap = 40 * state.speed + 150;
-        state.spawnTimer = minGap + Math.random() * 220;
+        const minGap = cfg.gapMul * state.speed + cfg.gapBase;
+        state.spawnTimer = minGap + Math.random() * cfg.gapRand;
       }
 
       // Move obstacles + collision.
@@ -487,7 +589,7 @@
 
     function reset() {
       state.score = 0;
-      state.speed = state.baseSpeed;
+      state.speed = DIFFICULTIES[state.difficulty].baseSpeed;
       state.obstacles = [];
       state.spawnTimer = 60;
       state.gameOver = false;
